@@ -1,0 +1,414 @@
+---
+title: "Worldwide Trend in Access to Sanitation Services"
+author: "Yuqi Liao"
+date: "6/19/2020"
+output: html_document
+---
+
+```{r global-option-setup, include=FALSE}
+knitr::opts_chunk$set(include = FALSE, echo = FALSE, message = FALSE, warning = FALSE, results = 'hide', cache = FALSE)
+```
+
+
+<!-- 
+Table of content for this RMD file 
+- Configure custom CSS (line 22 - xx)
+- Retrive and manipulate data
+ - 
+ -
+ -
+- Write up
+ - Introduction
+ - Animation
+ - Takeaway
+-->
+
+
+<!-- Configuring custom CSS -->
+<style>
+    body {
+      background-color: #e0eaef;
+    }
+    span{
+      color: #3EC7F4;
+    }
+</style>
+
+
+<!-- Retrive and manipulate data -->
+```{r set-up}
+################
+#### Set up ####
+################
+
+# define and load all required packages
+reqpkg <- c("dplyr", "tidyverse", "tidyr", "stringr", "ggplot2", "here", "WDI", "DataExplorer", "ggridges", "gganimate","egg", "ggtext", "tweenr", "animation", "grid", "lubridate", "kableExtra")
+sapply(reqpkg, function(pkgi) {
+  if (!pkgi %in% installed.packages()) {
+    install.packages(pkgi, repos = "http://cran.us.r-project.org")
+  }
+  library(pkgi, character.only = TRUE)
+})
+# inspect the working directory
+here()
+```
+
+
+```{r get-data}
+#################################################
+#### Call the World Bank API to get WDI data ####
+#################################################
+
+WDIsearch(string = "sanitation")
+sanitation <- WDI(country = "all", indicator = "SH.STA.BASS.ZS", start = 1960,
+    end = NULL, extra = TRUE, cache = NULL)
+```
+
+
+```{r check-data, eval = FALSE}
+##########################################################
+#### Inspect the returned object before data cleaning ####
+##########################################################
+
+# view the object and check its structure. TAKEAWAY: nothing jumps out yet
+View(sanitation)
+glimpse(sanitation)
+
+# check which variables have NA values (to pay special attention to later). TAKEAWAY: it looks like iso3c, region, capital, longitude, latitude, income, and lending has the same numbers of missing rows, and SH.STA.BASS.ZS has MANY missing rows (which makes sense beased on the View() call earlier, it looks like most countries only have sanitation data starting in 2000)
+sapply(sanitation, function(x) sum(is.na(x)))
+plot_missing(sanitation)
+
+# inspect the unique levels of each variable (to determine if the NA level is the only level that needs special attention). TAKEAWAY: the non-NA levels all make sense, need to pay attention to NA levels to see what's going on
+sapply(sanitation, function(x) unique(x))
+
+# inspect NA rows for non-SH.STA.BASS.ZS columns. TAKEAWAY: among the 180 cases that have NA values, there are three "countries" (under the country column): "Sub-Saharan Africa", "Latin America & Caribbean", and "North Macedonia". For "Sub-Saharan Africa" and "Latin America & Caribbean", I could later filter them out, as they should have "Aggregates" under the region column, but instead they are having NAs. I think this may be a mistake in the server. For "North Macedonia", I believe it should be a mistake to have NA under the region column (should be "Europe & Central Asia"), and NA under the income column (should be "Upper middle income", based on the 2019 income level defintion in the "CLASS.xls" file (http://databank.worldbank.org/data/download/site-content/CLASS.xls) downloaded on June 19 2020 from this page (https://datahelpdesk.worldbank.org/knowledgebase/articles/906519-world-bank-country-and-lending-groups)). I will need to update the NA values for North Macedonia later.
+sanitation %>% 
+  filter(iso3c %in% NA |region %in% NA |capital %in% NA |longitude %in% NA |latitude %in% NA | income %in% NA | lending %in% NA ) %>% 
+  View()
+
+# inspect NA rows for the SH.STA.BASS.ZS column. TAKEAWAY: these NA rows means there are no data in those years, which makes sense. Nothing jumps out, will filter these NA rows out later
+sanitation %>% 
+  filter(SH.STA.BASS.ZS %in% NA) %>% 
+  View()
+
+# check if there are gaps in the SH.STA.BASS.ZS column that needs interpolation later (e.g. if a country has value in SH.STA.BASS.ZS for 2000, 2001, 2004, 2005, but has NA for 2002, 2003, I need to do some interpolation). The following code first removes the NA rows in SH.STA.BASS.ZS, and then check for each country if the number of rows are the same as (last avaiable year - first avaiable year + 1). If they are the same it means there are no gaps. In other words, there's only trailing and leading NA rows, which will be removed safely and no interpolation would be needed. TAKEAWAY: The code returns zero (no rows), which means there's no need to do interpolation later.
+sanitation %>% 
+  filter(!SH.STA.BASS.ZS %in% NA) %>% 
+  group_by(country) %>%
+  arrange(country, year) %>% 
+  add_count() %>% 
+  mutate(numberOfYears = max(year) - min(year) + 1) %>% 
+  mutate(isThereGapInYears = ifelse(numberOfYears == n, FALSE, TRUE)) %>% 
+  filter(isThereGapInYears == TRUE) %>% 
+  nrow()
+
+```
+
+
+```{r manipulate-data}
+#################################  
+#### Data cleaning/wrangling ####
+#################################  
+
+sanitationProcessed <- sanitation %>% 
+  # keep relevant columns
+  select(country, SH.STA.BASS.ZS, year, region, income) %>% 
+  # fix the NA columns for North Macedonia, more details in line 81
+  mutate(income = ifelse(country %in% "North Macedonia", "Upper middle income", income)) %>%
+  # drop rows whose region is Aggregates, or NA ("Sub-Saharan Africa", "Latin America & Caribbean"), more details in line 81
+  filter(!region %in% c("Aggregates", NA)) %>% 
+  # drop rows which have NA for SH.STA.BASS.ZS
+  filter(!SH.STA.BASS.ZS %in% NA) %>% 
+  # for each country, identify if it has SH.STA.BASS.ZS data for all years (from 2000 to 2017), if not, drop their rows #21 countries are dropped and 191 countries are left
+  group_by(country) %>% 
+  mutate(numberOfYears = max(year) - min(year) + 1) %>% 
+  filter(numberOfYears == 18) 
+
+# calculate the gap between 2000 and 2017 for each country in SH.STA.BASS.ZS
+sanitationChange <- sanitationProcessed %>% 
+  group_by(country) %>% 
+  arrange(year, country) %>% 
+  # get only the first (2000) and the last (2017) row, for each country
+  slice(1,n()) %>% 
+  pivot_wider(names_from = year, values_from = SH.STA.BASS.ZS) %>% 
+  mutate(gap2017_2000 = `2017` - `2000`) %>%
+  mutate(gap2017_2000Category = ifelse(gap2017_2000 > 0, "Increased", ifelse(gap2017_2000 < -0, "Decreased", "Unchanged")),
+         gap2017_2000Category = factor(gap2017_2000Category, levels = c("Decreased", "Unchanged", "Increased"))) %>% 
+  select(country,`2000`, `2017`, gap2017_2000Category)
+
+# finish creating the sanitationProcessed object
+sanitationProcessed <- sanitationProcessed %>% 
+  # merge sanitationProcessed and sanitationChange
+  left_join(sanitationChange, by = "country") %>% 
+  # make income & year factor
+  mutate(income = factor(income, levels = c("Low income", "Lower middle income", "Upper middle income", "High income")),
+         year = as.Date(ISOdate(year = year, month = 6, day = 1))) %>% 
+  select(country, year, SH.STA.BASS.ZS, income, `2000`, `2017`, gap2017_2000Category) %>% 
+  # reorder
+  arrange(year, country) 
+  
+# create sanitationProcessedList for the tweenr functions
+sanitationProcessedList <- sanitationProcessed %>% 
+  group_by(year) %>% 
+  group_split()
+
+# apply tweenr: this adds in values between each list (state) of the data so I can create animations laters
+tf <- tween_states(sanitationProcessedList, tweenlength= 6, statelength=0, ease='linear',nframes=200)
+
+# tween_states function has a limitation that it won't keep the last state. therefore, need to do a row_bind of the last state to the tf object
+tf_lastState <- sanitationProcessedList[[length(sanitationProcessedList)]] %>% 
+  bind_cols(tf[tf$.frame==1,] %>% 
+              select(.phase, .id, .frame) %>% 
+              mutate(.frame = max(tf$.frame) + 1))
+tf <- tf %>% 
+  bind_rows(tf_lastState)
+
+
+# create years. this is for the timeline later in the animation
+years <- seq(2000, 2017, by = 1)
+yearData <- data.frame(line = c(rep(1,length(years))), 
+                       year = as.Date(ISOdate(year = years, month = 6, day = 1)), 
+                       upper = c(rep(1.05,length(years))), 
+                       lower = c(rep(0.95,length(years))),
+                       stringsAsFactors = FALSE)
+yearDataList <- yearData %>% 
+  group_by(year) %>% 
+  group_split()
+# apply tweenr again on the list which has years data. again, this adds in values between each list (state) of the data so I can create animations (of the timeline) laters
+tf2 <- tween_states(yearDataList, tweenlength= 6, statelength=0, ease='exponential-in-out',nframes=200)
+
+tf2_lastState <- yearDataList[[length(yearDataList)]] %>% 
+  bind_cols(tf2[tf2$.frame==1,] %>% 
+              select(.phase, .id, .frame) %>% 
+              mutate(.frame = max(tf2$.frame) + 1))
+
+tf2 <- tf2 %>% 
+  bind_rows(tf2_lastState)
+```
+
+```{r prep-for-data-viz}
+
+###############################################  
+#### Set parameters for data visualization ####
+###############################################
+
+# define colors
+backgroundCol <- "#e0eaef"
+cols <- c("#fb3a18", "#fbab18", "#3FA66C", "#3EC7F4", "#242953" )
+
+# define x axis break labels and levels
+xAxisBreaks <- seq(0, 100, by = 20)
+xAxisLabels <- c("0", "20", "40", "60", "80", "100%")
+xAxisLimits <- c(0,max(xAxisBreaks)* 1.2) 
+
+# define title, subtitle, and caption
+plotTitle <- "<span>Share of the population using at least basic sanitation services<br>
+by country's income group: 2000 - 2017</span>"
+plotSubtitle <- "Improvement is observed for most countries across income groups, although the rate of improvement varies"
+plotCaption <- "<span>
+
+
+NOTE: For a list of all 192 countries represented in the chart, see the <strong>Source and method</strong> section.<br>
+WHO/UNICEF defines safely managed sanitation facilities as at least basic sanitation services, or improved sanitation<br>
+facilities, that are not shared with other households and where excreta are safely disposed of in situ or transported<br> 
+and treated offsite. Improved sanitation facilities include flush/pour flush to piped sewer systems, septic tanks or <br>
+pit latrines; ventilated improved pit latrines, compositing toilets or pit latrines with slabs.
+
+SOURCE: WHO/UNICEF Joint Monitoring Programme for Water Supply, Sanitation and Hygiene; World Development Indicators<br>
+(SH.STA.BASS.ZS; People using at least basic sanitation services (% of population))
+</span>"
+
+# define themes for the main plot (the ridgeline plot)
+theme_ridge <- theme(text = element_text(family="Arial", color = "black"),
+                     panel.grid = element_blank(),
+                     panel.grid.major.y = element_line(size = 0.25, color = "#454545", linetype = "solid"), 
+                     panel.border = element_blank(),
+                     axis.title=element_text(size=15, margin = margin(t=15, b = 5), hjust = .5, family = "Arial", color = "black"),
+                     axis.text.x=element_text(size=15, angle = 0, hjust = 0.5, vjust = 0, family = "Arial"),
+                     axis.text.y=element_text(size=15, family = "Arial", color = "black"),
+                     axis.line.x=element_line(size = 0.25, color = "#454545"),
+                     #axis.line.y=element_line(size = 1),
+                     axis.title.x = element_text(size=15, angle = 0, hjust = 0.5, vjust = -3, family = "Arial"),
+                     axis.ticks.x = element_blank(),  
+                     axis.ticks.y = element_blank(),
+                     axis.ticks.length.y = unit(0.3, "cm"),
+                     plot.caption=element_markdown(size=15, hjust = 0,margin=margin(t=15, b = 15),lineheight=1.05, family = "Arial", color = "#454545"),
+                     legend.position="top",
+                     legend.title = element_text(size=13, angle = 0, hjust = 0, vjust = 0.4, family = "Arial", face = "bold"),
+                     legend.text = element_text(size=13, angle = 0, hjust = 0, vjust = 0.4, family = "Arial"),
+                     legend.key.size = unit(13, "pt"),
+                     plot.margin = margin(t = 10,r = 30, b = 5, l = 5, unit = "pt") 
+                     )
+
+# define themes for the timeline (to guide the interpretation of the animation)
+theme_dot <- theme(text = element_text(family="Arial", color = "black"),
+                   panel.background=element_rect(fill=backgroundCol),
+                   plot.background=element_rect(fill=backgroundCol),
+                   panel.grid = element_blank(),
+                   axis.ticks=element_blank(),
+                   axis.text=element_blank(),
+                   plot.title=element_markdown(size=31, margin = margin(t=10, b = 5), family = "Arial", face = "bold" , hjust= 0, lineheight=1.15),
+                   plot.subtitle=element_markdown(size=19, margin = margin(t=5, b = 10),family = "Arial", color = "black"),
+                   legend.position="none",
+                   plot.margin = margin(t = 10,r = 30, b = 30, l = 0, unit = "pt") 
+                   )
+
+# define a helper function to draw the same figure n-many times, so that the animation "pauses"
+gifReplicate <- function(x) {
+  grid.draw(rectGrob(gp=gpar(fill="#e0eaef", lwd = 0)))
+  grid::grid.draw(x)
+}
+```
+
+
+```{r animation}
+
+################################
+#### Create animation (GIF) ####
+################################
+
+saveGIF({
+  
+  # construct for loop to draw the plot for each frame (generated by the tweenr function in line 152 & 174)
+  for (i in 1:max(tf$.frame)) {
+    print(paste0("working on the ", i, "th frame"))
+    
+    # create the main ridge plot object ggRidge
+    ggRidge <- ggplot(data = subset(tf, .frame == i) , mapping = aes(x=SH.STA.BASS.ZS, y=income))+
+      # add layer for ridgeline (density estimates)
+      geom_density_ridges(
+        color = cols[5],
+        fill = cols[5],
+        rel_min_height = 0.003,
+        scale = 0.9,
+        alpha = 0.9,
+        bandwidth = 6,
+        show.legend = FALSE,
+      ) +
+      # add layer for dots (representing each country)
+      geom_point(data = subset(tf, .frame == i), 
+                 mapping = aes(color = gap2017_2000Category),
+                 alpha=0.68, pch=16, size = 6,
+                 show.legend = TRUE) +
+      # customize aesthetics of the plot 
+      scale_x_continuous(labels=xAxisLabels, expand = c(0.01, 0), breaks=xAxisBreaks, limits =xAxisLimits) +      
+      scale_color_manual(values=cols) +
+      scale_fill_manual(values=cols) +
+      labs(x="Share of the population using at least basic sanitation services", y="", 
+           caption = plotCaption) +
+      guides(color = guide_legend("Percentage change from 2000 to 2017")) +
+      theme_minimal() +
+      theme_ridge
+    
+    # turn ggRidge into a gplot2 plot grob
+    ridge <- ggplotGrob(ggRidge)
+    
+    # create the timeline plot object ggDots
+    ggDots <- ggplot(data = tf2, mapping = aes(year,line)) + 
+      # add layer for the square (representing the year)
+      geom_point(data = subset(tf2, .frame == i), 
+                 #mapping = aes(frame = year), 
+                 color = cols[4], size = 8, pch = 15) +
+      # add layer for the timeline "skeleton"
+      geom_path(data = yearData, mapping = aes(x = year), color = "black") + geom_linerange(data = yearData, mapping = aes(ymin = lower, ymax = upper), color = "black") +
+      # add year labels
+      geom_text(data = yearData, mapping = aes(label = years), color = "black", size = 5.2, vjust = -1.5,family = "Arial") +
+      # customize aesthetics of the plot 
+      labs(x=NULL, y=NULL, title = plotTitle, subtitle = plotSubtitle) +
+      scale_y_continuous(limits = 1 + c(-.05, .2)) +
+      theme_dot
+     
+    # turn ggRidge into a gplot2 plot grob
+    timeLine <- ggplotGrob(ggDots)
+    
+    
+    # reformat the plot grobs
+    ridgeFrame <- gtable_frame(ridge, width = unit(34,"cm"), height = unit(10, "cm"), debug = FALSE)
+    timeLineFrame <- gtable_frame(timeLine, width = unit(34,"cm"), height = unit(1.8, "cm"), debug = FALSE)
+    
+    
+    
+    # define the state that I want the plot to "pause" (in this case, the last frame)
+    pause_frames <- c(max(tf$.frame))
+    
+    # for each frame expect for the first, start by drawing a blank new page on the screen
+    if (i != 1) {
+      grid.newpage()
+    }
+    
+    # then draw with background color
+    grid.draw(rectGrob(gp=gpar(fill="#e0eaef", lwd = 1)))
+    
+    # combine the reformated timeLineFrame andridgeFrame into one object
+    fg <- gtable_rbind(timeLineFrame, ridgeFrame, size = "last")
+    
+    # draw the combined plot
+    if (i %in% pause_frames){
+      replicate(2,gifReplicate(fg))
+    } else {
+      grid.draw(fg)
+    }
+    
+  }
+    
+},
+  # specify the pathway and name of the gif output, as well as the interval, width, and height
+  movie.name=here("GIFOutput", "sanitation.gif"),interval = .02, ani.width = 1200, ani.height = 800)
+```
+
+
+<!-- Takeaway write-up -->
+## <span>Introduction</span>
+Sanitation is fundamental to human development. Safely managed sanitation services can reduce diarrheal disease, and can significantly lessen the adverse health impacts of other disorders. 
+
+Using data from the [WHO/UNICEF Joint Monitoring Programme for Water Supply, Sanitation and Hygiene](https://washdata.org/) obtained through the [World Bank Open Data](https://data.worldbank.org/), a chart is created below about the [indicator](https://data.worldbank.org/indicator/SH.STA.BASS.ZS) "people using at least basic sanitation services (as a percent of the population)" for 191 countries around the world from 2000 to 2017. 
+
+## <span>How to read the chart</span>
+Each circle represents one country. The 191 countries are categorized into [four income groups](https://datahelpdesk.worldbank.org/knowledgebase/articles/906519-world-bank-country-and-lending-groups) based on the Gross National Income (GNI) per capita in 2018. The X-axis indicates the percentage of the country's population that uses at least basic sanitation services. The [density estimates](https://en.wikipedia.org/wiki/Density_estimation) are drawn for each group and reflect the distribution of countries.
+
+As the year progresses, the circles move along the X-axis. The color of the circle indicates whether the indicator in that country has decreased (red), stayed the same (orange), or increased (green) from 2000 to 2017. As the circles move, the distribution of countries reshapes.
+
+
+<!-- Show animation -->
+![](GIFOutput/sanitation.gif)
+
+
+## <span>Takeaways</span>
+
+- From 2000 to 2017, most countries have experienced an increase in the share of the population using at least basic sanitation services, as indicated by most circles and the distribution of circles moving to the right.
+
+- The share of the population using at least basic sanitation services varies by income groups at any given year between 2000 and 2017. High income countries have nearly universal access to at least basic sanitation services while most low income countries have less than half of their population with the same access.
+
+- The rate of change in the share of the population using at least basic sanitation services also differs by income group. As the high income countries have limited room for improvement, they generally exhibit a constant level of access. In comparison, countries in the upper middle income, lower middle income, and low income groups experience a higher rate of change in this indicator, as indicated by the faster speed of circles moving to the right.
+
+- Against the overall trend, a handful of countries experienced a decrease in the percentage of the population, which calls for special attention.
+
+
+## <span>Further analysis ideas</span>
+Further analysis could investigate other non-income factors that may explain the gap in the share of the population using at least basic sanitation services. Case studies of the outlier countries that have the largest increase or decrease would reveal insights on what is needed to improve sanitation situation around the world.
+
+
+## <span>Source and method</span>
+The 191 countries represented in the chart are the countries that have data for all years between 2000 and 2017. The list of countires and more information could be seen below. The term country does not imply political independence but refers to any territory for which authorities report separate social or economic statistics.
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName"> Show/Hide </button>  
+<div id="BlockName" class="collapse">  
+```{r country-list, include = TRUE, results = 'markup'}
+sanitationProcessed %>% 
+  select(country, income, `2000`, `2017`, gap2017_2000Category) %>% 
+  distinct() %>% 
+  rename(sanitationIndicator2000 = `2000`,
+         sanitationIndicator2017 = `2017`,
+         sanitationIndicatorChange = gap2017_2000Category) %>% 
+  mutate(sanitationIndicator2000 = round(sanitationIndicator2000, digits = 2),
+         sanitationIndicator2017 = round(sanitationIndicator2017, digits = 2)) %>% 
+  kable(format="html") %>% 
+  kable_styling() %>%
+  scroll_box(width="100%", height = "300px")
+```
+</div>
+
+<br>
+Data are downloaded via the [World Bank API](https://datahelpdesk.worldbank.org/knowledgebase/topics/125589-developer-information). The code of the analysis could be found here. 
+
+The indicator on sanitation are produced by the Joint Monitoring Programme of the World Health Organization (WHO) and United Nations Children's Fund (UNICEF) based on administrative sources, national censuses and nationally representative household surveys. WHO/UNICEF defines safely managed sanitation facilities as improved sanitation facilities that are not shared with other households and where excreta are safely disposed of in situ or transported and treated offsite. Improved sanitation facilities include flush/pour flush to piped sewer systems, septic tanks or pit latrines: ventilated improved pit latrines, compositing toilets or pit latrines with slabs.
