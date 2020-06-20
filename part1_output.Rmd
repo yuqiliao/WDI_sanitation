@@ -12,30 +12,51 @@ knitr::opts_chunk$set(include = FALSE, echo = FALSE, message = FALSE, warning = 
 
 <!-- 
 Table of content for this RMD file 
-- Configure custom CSS (line 22 - xx)
-- Retrive and manipulate data
- - 
- -
- -
-- Write up
- - Introduction
- - Animation
- - Takeaway
+- Configure custom CSS
+- Retrieve and manipulate data
+  - Set up
+  - Call the World Bank API to get WDI data
+  - Inspect the returned object before data cleaning
+  - Clean/wrangle Data
+- Create Data Visualization
+  - Set parameters for data visualization
+  - Create animation (GIF)
+- Begin write-up
+  - Introduction
+  - How to read the chart
+  - Takeaways
+  - Further analysis ideas
+  - Source and method
 -->
 
 
 <!-- Configuring custom CSS -->
 <style>
+    h1, h4 {
+      color: #3EC7F4;
+    }
     body {
       background-color: #e0eaef;
     }
     span{
       color: #3EC7F4;
     }
+    img {
+      border: 2px solid #3EC7F4;
+    }
+    .red{
+      color: #fb3a18;
+    }
+    .orange{
+      color: #fbab18;
+    }
+    .green{
+      color: #3FA66C;
+    }
 </style>
 
 
-<!-- Retrive and manipulate data -->
+<!-- Retrieve and manipulate data -->
 ```{r set-up}
 ################
 #### Set up ####
@@ -60,8 +81,22 @@ here()
 #################################################
 
 WDIsearch(string = "sanitation")
-sanitation <- WDI(country = "all", indicator = "SH.STA.BASS.ZS", start = 1960,
-    end = NULL, extra = TRUE, cache = NULL)
+sanitation <- tryCatch({WDI(country = "all", indicator = "SH.STA.BASS.ZS", start = 1960,
+    end = NULL, extra = TRUE, cache = NULL)},
+    error = function(e) e)
+
+#Note: The above line was working fine earlier this week (hence the reason to choose the WDI package to conduct this analysis) but it stopped working and throws out the following message
+# Error in 1:nrow(lab) : argument of length 0
+# In addition: Warning message:
+# In WDI(country = "all", indicator = "SH.STA.BASS.ZS", start = 1960,  :
+#   Unable to download indicators  SH.STA.BASS.ZS
+# This is similar to this github issue that was opened yesterday (https://github.com/vincentarelbundock/WDI/issues/35) that suggests the WB API server may have something to do with it.
+# I went ahead and investigate the WDI.R script hosted on github (https://github.com/vincentarelbundock/WDI/blob/master/R/WDI.R) and realized that I could make it work with some small tweaks. I have thus saved the returned data object into a .RDS file as the backup plan for data-read in.
+
+if (length(sanitation) == 2){
+  sanitation <- readRDS(file = "sanitationData.rds")
+}
+
 ```
 
 
@@ -74,19 +109,19 @@ sanitation <- WDI(country = "all", indicator = "SH.STA.BASS.ZS", start = 1960,
 View(sanitation)
 glimpse(sanitation)
 
-# check which variables have NA values (to pay special attention to later). TAKEAWAY: it looks like iso3c, region, capital, longitude, latitude, income, and lending has the same numbers of missing rows, and SH.STA.BASS.ZS has MANY missing rows (which makes sense beased on the View() call earlier, it looks like most countries only have sanitation data starting in 2000)
+# check which variables have NA values (to pay special attention to later). TAKEAWAY: it looks like iso3c, region, capital, longitude, latitude, income, and lending has the same numbers of missing rows, and SH.STA.BASS.ZS has MANY missing rows (which makes sense based on the View() call earlier, it looks like most countries only have sanitation data starting in 2000)
 sapply(sanitation, function(x) sum(is.na(x)))
 plot_missing(sanitation)
 
 # inspect the unique levels of each variable (to determine if the NA level is the only level that needs special attention). TAKEAWAY: the non-NA levels all make sense, need to pay attention to NA levels to see what's going on
 sapply(sanitation, function(x) unique(x))
 
-# inspect NA rows for non-SH.STA.BASS.ZS columns. TAKEAWAY: among the 180 cases that have NA values, there are three "countries" (under the country column): "Sub-Saharan Africa", "Latin America & Caribbean", and "North Macedonia". For "Sub-Saharan Africa" and "Latin America & Caribbean", I could later filter them out, as they should have "Aggregates" under the region column, but instead they are having NAs. I think this may be a mistake in the server. For "North Macedonia", I believe it should be a mistake to have NA under the region column (should be "Europe & Central Asia"), and NA under the income column (should be "Upper middle income", based on the 2019 income level defintion in the "CLASS.xls" file (http://databank.worldbank.org/data/download/site-content/CLASS.xls) downloaded on June 19 2020 from this page (https://datahelpdesk.worldbank.org/knowledgebase/articles/906519-world-bank-country-and-lending-groups)). I will need to update the NA values for North Macedonia later.
+# inspect NA rows for non-SH.STA.BASS.ZS columns. TAKEAWAY: among the 180 cases that have NA values, there are three "countries" (under the country column): "Sub-Saharan Africa", "Latin America & Caribbean", and "North Macedonia". For "Sub-Saharan Africa" and "Latin America & Caribbean", I could later filter them out, as they should have "Aggregates" under the region column, but instead they are having NAs. I think this may be a mistake in the server. For "North Macedonia", I believe it should be a mistake to have NA under the region column (should be "Europe & Central Asia"), and NA under the income column (should be "Upper middle income", based on the 2019 income level definition in the "CLASS.xls" file (http://databank.worldbank.org/data/download/site-content/CLASS.xls) downloaded on June 19 2020 from this page (https://datahelpdesk.worldbank.org/knowledgebase/articles/906519-world-bank-country-and-lending-groups)). I will need to update the NA values for North Macedonia later.
 sanitation %>% 
   filter(iso3c %in% NA |region %in% NA |capital %in% NA |longitude %in% NA |latitude %in% NA | income %in% NA | lending %in% NA ) %>% 
   View()
 
-# inspect NA rows for the SH.STA.BASS.ZS column. TAKEAWAY: these NA rows means there are no data in those years, which makes sense. Nothing jumps out, will filter these NA rows out later
+# inspect NA rows for the SH.STA.BASS.ZS column. TAKEAWAY: these NA rows mean there are no data in those years, which makes sense. Nothing jumps out, will filter these NA rows out later
 sanitation %>% 
   filter(SH.STA.BASS.ZS %in% NA) %>% 
   View()
@@ -106,16 +141,16 @@ sanitation %>%
 
 
 ```{r manipulate-data}
-#################################  
-#### Data cleaning/wrangling ####
-#################################  
+############################
+#### Clean/wrangle Data ####
+############################ 
 
 sanitationProcessed <- sanitation %>% 
   # keep relevant columns
   select(country, SH.STA.BASS.ZS, year, region, income) %>% 
-  # fix the NA columns for North Macedonia, more details in line 81
+  # fix the NA columns for North Macedonia, more details in the section Inspect the returned object before data cleaning 
   mutate(income = ifelse(country %in% "North Macedonia", "Upper middle income", income)) %>%
-  # drop rows whose region is Aggregates, or NA ("Sub-Saharan Africa", "Latin America & Caribbean"), more details in line 81
+  # drop rows whose region is Aggregates, or NA ("Sub-Saharan Africa", "Latin America & Caribbean"), more details in the section Inspect the returned object before data cleaning
   filter(!region %in% c("Aggregates", NA)) %>% 
   # drop rows which have NA for SH.STA.BASS.ZS
   filter(!SH.STA.BASS.ZS %in% NA) %>% 
@@ -153,7 +188,7 @@ sanitationProcessedList <- sanitationProcessed %>%
   group_split()
 
 # apply tweenr: this adds in values between each list (state) of the data so I can create animations laters
-tf <- tween_states(sanitationProcessedList, tweenlength= 6, statelength=0, ease='linear',nframes=200)
+tf <- tween_states(sanitationProcessedList, tweenlength= 5, statelength=0, ease='linear',nframes=200)
 
 # tween_states function has a limitation that it won't keep the last state. therefore, need to do a row_bind of the last state to the tf object
 tf_lastState <- sanitationProcessedList[[length(sanitationProcessedList)]] %>% 
@@ -175,7 +210,7 @@ yearDataList <- yearData %>%
   group_by(year) %>% 
   group_split()
 # apply tweenr again on the list which has years data. again, this adds in values between each list (state) of the data so I can create animations (of the timeline) laters
-tf2 <- tween_states(yearDataList, tweenlength= 6, statelength=0, ease='exponential-in-out',nframes=200)
+tf2 <- tween_states(yearDataList, tweenlength= 5, statelength=0, ease='exponential-in-out',nframes=200)
 
 tf2_lastState <- yearDataList[[length(yearDataList)]] %>% 
   bind_cols(tf2[tf2$.frame==1,] %>% 
@@ -186,6 +221,8 @@ tf2 <- tf2 %>%
   bind_rows(tf2_lastState)
 ```
 
+
+<!-- Data Visualization -->
 ```{r prep-for-data-viz}
 
 ###############################################  
@@ -255,8 +292,10 @@ theme_dot <- theme(text = element_text(family="Arial", color = "black"),
 
 # define a helper function to draw the same figure n-many times, so that the animation "pauses"
 gifReplicate <- function(x) {
-  grid.draw(rectGrob(gp=gpar(fill="#e0eaef", lwd = 0)))
-  grid::grid.draw(x)
+    grid.newpage()
+    grid.draw(rectGrob(gp=gpar(fill=backgroundCol, lwd = 0)))
+    fg <- gtable_rbind(timeLineFrame, ridgeFrame, size = "last")
+    grid.draw(fg)  
 }
 ```
 
@@ -326,30 +365,28 @@ saveGIF({
     ridgeFrame <- gtable_frame(ridge, width = unit(34,"cm"), height = unit(10, "cm"), debug = FALSE)
     timeLineFrame <- gtable_frame(timeLine, width = unit(34,"cm"), height = unit(1.8, "cm"), debug = FALSE)
     
+
     
-    
-    # define the state that I want the plot to "pause" (in this case, the last frame)
-    pause_frames <- c(max(tf$.frame))
-    
-    # for each frame expect for the first, start by drawing a blank new page on the screen
+    # for each frame except for the first, start by drawing a blank new page on the screen
     if (i != 1) {
       grid.newpage()
     }
     
     # then draw with background color
-    grid.draw(rectGrob(gp=gpar(fill="#e0eaef", lwd = 1)))
+    grid.draw(rectGrob(gp=gpar(fill=backgroundCol, lwd = 0)))
     
     # combine the reformated timeLineFrame andridgeFrame into one object
     fg <- gtable_rbind(timeLineFrame, ridgeFrame, size = "last")
     
     # draw the combined plot
-    if (i %in% pause_frames){
-      replicate(2,gifReplicate(fg))
-    } else {
-      grid.draw(fg)
-    }
+    grid.draw(fg)
+  
     
   }
+  
+  # repeat the last frame several times to "pause"
+  replicate(100,gifReplicate(fg))
+  grid.draw(fg)
     
 },
   # specify the pathway and name of the gif output, as well as the interval, width, and height
@@ -357,16 +394,16 @@ saveGIF({
 ```
 
 
-<!-- Takeaway write-up -->
+<!-- Begin write-up -->
 ## <span>Introduction</span>
 Sanitation is fundamental to human development. Safely managed sanitation services can reduce diarrheal disease, and can significantly lessen the adverse health impacts of other disorders. 
 
-Using data from the [WHO/UNICEF Joint Monitoring Programme for Water Supply, Sanitation and Hygiene](https://washdata.org/) obtained through the [World Bank Open Data](https://data.worldbank.org/), a chart is created below about the [indicator](https://data.worldbank.org/indicator/SH.STA.BASS.ZS) "people using at least basic sanitation services (as a percent of the population)" for 191 countries around the world from 2000 to 2017. 
+Using data from the [WHO/UNICEF Joint Monitoring Programme for Water Supply, Sanitation and Hygiene](https://washdata.org/) obtained through the [World Bank Open Data](https://data.worldbank.org/), I created a chart below about the [indicator](https://data.worldbank.org/indicator/SH.STA.BASS.ZS) "people using at least basic sanitation services (as a percent of the population)" for 191 countries around the world from 2000 to 2017. 
 
 ## <span>How to read the chart</span>
 Each circle represents one country. The 191 countries are categorized into [four income groups](https://datahelpdesk.worldbank.org/knowledgebase/articles/906519-world-bank-country-and-lending-groups) based on the Gross National Income (GNI) per capita in 2018. The X-axis indicates the percentage of the country's population that uses at least basic sanitation services. The [density estimates](https://en.wikipedia.org/wiki/Density_estimation) are drawn for each group and reflect the distribution of countries.
 
-As the year progresses, the circles move along the X-axis. The color of the circle indicates whether the indicator in that country has decreased (red), stayed the same (orange), or increased (green) from 2000 to 2017. As the circles move, the distribution of countries reshapes.
+As the year progresses, the circles move along the X-axis. The color of the circle indicates whether the indicator in that country has <span class="red">decreased</span>, <span class="orange">stayed the same</span>, or <span class="green">increased</span> from 2000 to 2017. As the circles move, the distribution of countries reshapes.
 
 
 <!-- Show animation -->
@@ -385,11 +422,11 @@ As the year progresses, the circles move along the X-axis. The color of the circ
 
 
 ## <span>Further analysis ideas</span>
-Further analysis could investigate other non-income factors that may explain the gap in the share of the population using at least basic sanitation services. Case studies of the outlier countries that have the largest increase or decrease would reveal insights on what is needed to improve sanitation situation around the world.
+Further analysis could investigate other non-income factors that may explain the gap in the share of the population using at least basic sanitation services. Case studies of the outlier countries that have the largest increase or decrease would reveal insights on what is needed to improve the sanitation situations around the world.
 
 
 ## <span>Source and method</span>
-The 191 countries represented in the chart are the countries that have data for all years between 2000 and 2017. The list of countires and more information could be seen below. The term country does not imply political independence but refers to any territory for which authorities report separate social or economic statistics.
+The 191 countries represented in the chart are the countries that have data for all years between 2000 and 2017. The list of countries and more information could be seen below. The term country does not imply political independence but refers to any territory for which authorities report separate social or economic statistics.
 
 <button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName"> Show/Hide </button>  
 <div id="BlockName" class="collapse">  
@@ -409,6 +446,6 @@ sanitationProcessed %>%
 </div>
 
 <br>
-Data are downloaded via the [World Bank API](https://datahelpdesk.worldbank.org/knowledgebase/topics/125589-developer-information). The code of the analysis could be found here. 
+Data are downloaded via the [World Bank API](https://datahelpdesk.worldbank.org/knowledgebase/topics/125589-developer-information). The code of the analysis could be found [here](https://github.com/yuqiliao/WDI_sanitation/blob/master/part1_output.Rmd). 
 
-The indicator on sanitation are produced by the Joint Monitoring Programme of the World Health Organization (WHO) and United Nations Children's Fund (UNICEF) based on administrative sources, national censuses and nationally representative household surveys. WHO/UNICEF defines safely managed sanitation facilities as improved sanitation facilities that are not shared with other households and where excreta are safely disposed of in situ or transported and treated offsite. Improved sanitation facilities include flush/pour flush to piped sewer systems, septic tanks or pit latrines: ventilated improved pit latrines, compositing toilets or pit latrines with slabs.
+The indicator on sanitation is produced by the Joint Monitoring Programme of the World Health Organization (WHO) and United Nations Children's Fund (UNICEF) based on administrative sources, national censuses and nationally representative household surveys. WHO/UNICEF defines safely managed sanitation facilities as improved sanitation facilities that are not shared with other households and where excreta are safely disposed of in situ or transported and treated offsite. Improved sanitation facilities include flush/pour flush to piped sewer systems, septic tanks or pit latrines: ventilated improved pit latrines, compositing toilets or pit latrines with slabs.
