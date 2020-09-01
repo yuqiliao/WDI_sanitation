@@ -93,7 +93,7 @@ sanitation <- tryCatch({WDI(country = "all", indicator = "SH.STA.BASS.ZS", start
 # This is similar to this github issue that was opened yesterday (https://github.com/vincentarelbundock/WDI/issues/35) that suggests the WB API server may have something to do with it.
 # I went ahead and investigate the WDI.R script hosted on github (https://github.com/vincentarelbundock/WDI/blob/master/R/WDI.R) and realized that I could make it work with some small tweaks. I have thus saved the returned data object into a .RDS file as the backup plan for data-read in.
 
-if (length(sanitation) == 2){
+if (length(sanitation) == 2 | is.null(sanitation) ){
   sanitation <- readRDS(file = "sanitationData.rds")
 }
 
@@ -300,7 +300,7 @@ gifReplicate <- function(x) {
 ```
 
 
-```{r animation}
+```{r animation , eval = FALSE}
 
 ################################
 #### Create animation (GIF) ####
@@ -407,7 +407,7 @@ As the year progresses, the circles move along the X-axis. The color of the circ
 
 
 <!-- Show animation -->
-![](GIFOutput/sanitation.gif)
+![](GIFOutput/sanitation-compressed.gif)
 
 
 ## <span>Takeaways</span>
